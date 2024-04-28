@@ -1,38 +1,35 @@
 package com.example.imageemojiconvertor
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.ImageFormat
-import android.graphics.SurfaceTexture
-import android.hardware.camera2.CameraCaptureSession
-import android.hardware.camera2.CameraDevice
-import android.hardware.camera2.CameraManager
-import android.hardware.camera2.CaptureRequest
+import android.graphics.*
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
+import android.hardware.camera2.*
 import android.media.ImageReader
-import android.os.Bundle
-import android.os.Environment
-import android.os.Handler
-import android.os.HandlerThread
+import android.os.*
 import android.view.Surface
 import android.view.TextureView
 import android.widget.Button
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var emojiConverter: EmojiConverter
     lateinit var textureView: TextureView
     lateinit var cameraManager: CameraManager
     lateinit var cameraDevice: CameraDevice
-    lateinit var captureRequest:CaptureRequest
     lateinit var cameraCaptureSession: CameraCaptureSession
     lateinit var handler: Handler
     lateinit var handlerThread: HandlerThread
-    lateinit var captRequest:CaptureRequest.Builder
-    lateinit var imageReader:ImageReader
+    lateinit var captRequest: CaptureRequest.Builder
+    lateinit var imageReader: ImageReader
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,41 +43,47 @@ class MainActivity : AppCompatActivity() {
         handlerThread.start()
         handler = Handler(handlerThread.looper)
 
-
-        imageReader = ImageReader.newInstance(1080,1920,ImageFormat.JPEG,1)
-        imageReader.setOnImageAvailableListener(object : ImageReader.OnImageAvailableListener{
-            override fun onImageAvailable(p0: ImageReader?) {
-
-                var image = p0?.acquireLatestImage()
-                var buffer = image!!.planes[0].buffer
-                var bytes = ByteArray(buffer.remaining())
+        imageReader = ImageReader.newInstance(1080, 1920, ImageFormat.JPEG, 1)
+        imageReader.setOnImageAvailableListener(object : ImageReader.OnImageAvailableListener {
+            override fun onImageAvailable(reader: ImageReader?) {
+                val image = reader?.acquireLatestImage()
+                val buffer = image!!.planes[0].buffer
+                val bytes = ByteArray(buffer.remaining())
                 buffer.get(bytes)
 
-
-                var file = File(getExternalFilesDir(Environment.DIRECTORY_PICTURES),"img.jpeg")
-                var opstream = FileOutputStream(file)
-
-                opstream.write(bytes)
-
-                opstream.close()
+                val file = File(getExternalFilesDir(Environment.DIRECTORY_PICTURES), "img.jpeg")
+                val outputStream = FileOutputStream(file)
+                outputStream.write(bytes)
+                outputStream.close()
                 image.close()
 
+                // Convert the captured image to a sticker
+                val bitmap = BitmapFactory.decodeFile(file.path)
+                val stickerBitmap: Bitmap = convertToSticker(bitmap)
 
-                Toast.makeText(this@MainActivity, "Image captured", Toast.LENGTH_SHORT).show()
+                // Display the sticker image or do further processing as needed
+                stickerBitmap.let {
+                    saveImage(it)
+
+                    val emojiBitmap = Emojifier.detectFacesandOverlayEmoji(this@MainActivity,it)
+
+                    displayEmoji(emojiBitmap)
+                   // shareImage(it)  to share the image
+                }
+
+                Toast.makeText(this@MainActivity, "Image captured and converted to sticker", Toast.LENGTH_SHORT).show()
             }
-
-
-        },handler)
+        }, handler)
 
         findViewById<Button>(R.id.captureButton).apply {
             setOnClickListener {
                 captRequest = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
                 captRequest.addTarget(imageReader.surface)
-                cameraCaptureSession.capture(captRequest.build(),null,null)
+                cameraCaptureSession.capture(captRequest.build(), null, null)
             }
         }
 
-        textureView.surfaceTextureListener = object :TextureView.SurfaceTextureListener{
+        textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(
                 surface: SurfaceTexture,
                 width: Int,
@@ -94,7 +97,7 @@ class MainActivity : AppCompatActivity() {
                 width: Int,
                 height: Int
             ) {
-                TODO("Not yet implemented")
+                // No implementation needed
             }
 
             override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
@@ -102,75 +105,169 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
-                //no action needed
+                // No implementation needed
             }
+        }
+    }
 
+    private fun displayEmoji(emojiBitmap: Bitmap) {
+
+        val intent = Intent(this@MainActivity,DisplayImageActivity::class.java).apply {
+            putExtra("emoji_bitmap", emojiBitmap)
         }
 
-
-        val captureButton : Button = findViewById(R.id.captureButton)
+        startActivity(intent)
 
 
     }
 
     @SuppressLint("MissingPermission")
     private fun openCamera() {
-        cameraManager.openCamera(cameraManager.cameraIdList[0],object :CameraDevice.StateCallback(){
+        cameraManager.openCamera(cameraManager.cameraIdList[0], object : CameraDevice.StateCallback() {
             override fun onOpened(p0: CameraDevice) {
-               this@MainActivity.cameraDevice= p0
+                this@MainActivity.cameraDevice = p0
 
-                var captRequest = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+                val captRequest = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
 
-                var surface = Surface(textureView.surfaceTexture)
+                val surface = Surface(textureView.surfaceTexture)
                 captRequest.addTarget(surface)
 
-                cameraDevice.createCaptureSession(listOf(surface,imageReader.surface),object: CameraCaptureSession.StateCallback(){
-                    override fun onConfigured(p0: CameraCaptureSession) {
-                       this@MainActivity.cameraCaptureSession = p0
-                        cameraCaptureSession.setRepeatingRequest(captRequest.build(),null,null)
+                cameraDevice.createCaptureSession(
+                    listOf(surface, imageReader.surface),
+                    object : CameraCaptureSession.StateCallback() {
+                        override fun onConfigured(p0: CameraCaptureSession) {
+                            this@MainActivity.cameraCaptureSession = p0
+                            cameraCaptureSession.setRepeatingRequest(captRequest.build(), null, null)
+                        }
 
-                    }
-
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-                        TODO("Not yet implemented")
-                    }
-
-                },handler)
+                        override fun onConfigureFailed(session: CameraCaptureSession) {
+                            // No implementation needed
+                        }
+                    },
+                    handler
+                )
             }
 
             override fun onDisconnected(camera: CameraDevice) {
-                TODO("Not yet implemented")
+                // No implementation needed
             }
 
             override fun onError(camera: CameraDevice, error: Int) {
-                TODO("Not yet implemented")
+                // No implementation needed
             }
-
-        },handler,)
+        }, handler)
     }
 
     private fun getPermission() {
-        var permissionList = mutableListOf<String>()
+        val permissionList = mutableListOf<String>()
 
-        if(checkSelfPermission(android.Manifest.permission.CAMERA)!= PackageManager.PERMISSION_GRANTED)permissionList.add(android.Manifest.permission.CAMERA)
-        if(checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)!= PackageManager.PERMISSION_GRANTED)permissionList.add(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        if(checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)!= PackageManager.PERMISSION_GRANTED)permissionList.add(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+        if (checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) permissionList.add(
+            android.Manifest.permission.CAMERA
+        )
+        if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) permissionList.add(
+            android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+        )
+        if (checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) permissionList.add(
+            android.Manifest.permission.READ_EXTERNAL_STORAGE
+        )
 
-        if(permissionList.size>0) requestPermissions(permissionList.toTypedArray(),101)
+        if (permissionList.size > 0) requestPermissions(permissionList.toTypedArray(), 101)
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        grantResults.forEach {
-            if(it!=PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this,"Permission Denied",Toast.LENGTH_SHORT).show()
-                getPermission()
-            }
+    private fun convertToSticker(bitmap: Bitmap): Bitmap {
+        // Example of adding a border to the bitmap to create a sticker effect
+        val stickerWidth = bitmap.width
+        val stickerHeight = bitmap.height
+
+        val stickerBitmap = Bitmap.createBitmap(stickerWidth, stickerHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(stickerBitmap)
+        canvas.drawColor(Color.WHITE)
+
+        val borderPaint = Paint().apply {
+            color = Color.BLACK
+            style = Paint.Style.STROKE
+            strokeWidth = 10f
         }
+
+        canvas.drawBitmap(bitmap, 0f, 0f, null)
+        canvas.drawRect(0f, 0f, stickerWidth.toFloat(), stickerHeight.toFloat(), borderPaint)
+
+        return stickerBitmap
+    }
+
+    private fun saveImage(bitmap: Bitmap) {
+        // Resize the bitmap to reduce its size
+        val resizedBitmap = resizeBitmap(bitmap, 800) // Specify the desired width here (e.g., 800px)
+
+        // Compress and save the resized bitmap
+        val bytes = ByteArrayOutputStream()
+        resizedBitmap.compress(Bitmap.CompressFormat.PNG, 90, bytes)
+        val wallpaperDirectory = File("${Environment.getExternalStorageDirectory()}/Stickers/")
+        if (!wallpaperDirectory.exists()) {
+            wallpaperDirectory.mkdirs()
+        }
+
+        try {
+            val f = File(wallpaperDirectory, "sticker.png")
+            f.createNewFile()
+            val fo: OutputStream = FileOutputStream(f)
+            fo.write(bytes.toByteArray())
+            fo.close()
+            Toast.makeText(this, "Sticker saved successfully", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun shareImage(bitmap: Bitmap) {
+        // Resize the bitmap to reduce its size
+        val resizedBitmap = resizeBitmap(bitmap, 800) // Specify the desired width here (e.g., 800px)
+
+        // Save the resized bitmap to external storage
+        val bytes = ByteArrayOutputStream()
+        resizedBitmap.compress(Bitmap.CompressFormat.PNG, 90, bytes)
+        val wallpaperDirectory = File("${Environment.getExternalStorageDirectory()}/Stickers/")
+        if (!wallpaperDirectory.exists()) {
+            wallpaperDirectory.mkdirs()
+        }
+
+        try {
+            val f = File(wallpaperDirectory, "sticker.png")
+            f.createNewFile()
+            val fo: OutputStream = FileOutputStream(f)
+            fo.write(bytes.toByteArray())
+            fo.close()
+
+            // Create a content URI for the saved image file
+            val uri = FileProvider.getUriForFile(
+                this,
+                applicationContext.packageName + ".provider",
+                f
+            )
+
+            // Create a share intent
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "image/png"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            // Launch the share activity
+            startActivity(Intent.createChooser(shareIntent, "Share Image"))
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Failed to share image", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun resizeBitmap(bitmap: Bitmap, maxWidth: Int): Bitmap {
+        val width = bitmap.width
+        val height = bitmap.height
+        val scale = maxWidth.toFloat() / width
+        val matrix = Matrix()
+        matrix.postScale(scale, scale)
+        return Bitmap.createBitmap(bitmap, 0, 0, width, height, matrix, false)
     }
 
 
